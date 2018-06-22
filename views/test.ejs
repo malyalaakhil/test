@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en" xmlns="http://www.w3.org/1999/html">
+<head>
+    <title>O'Reilly Introduction to WebRTC</title>
+    <link rel="stylesheet" type="text/css" href="styles.css">
+    <script src="/socket.io/socket.io.js"></script>
+    <script
+            src="https://code.jquery.com/jquery-3.3.1.slim.min.js"
+            integrity="sha256-3edrmyuQ0w65f8gfBsqowzjJe2iM6n0nKciPUp8y+7E="
+            crossorigin="anonymous"></script>
+</head>
+<body>
+<div class="main-video">
+    <video width="100%" height="300" id="mainVideoTag"></video>
+</div>
+<div class="small-video">
+    <video width="50%" height="150" id="smallVideoTag"></video>
+</div>
+
+<input type="button" class="btn btn-default" value="Start Call" id="startCall"/>
+<input type="button" class="btn btn-default" value="End Call" id="endCall"/>
+
+<script>
+
+    var mainVideoArea = document.querySelector("#mainVideoTag");
+    var smallVideoArea = document.querySelector("#smallVideoTag");
+
+    $(document).ready(function(){
+
+        var SOCKET_IO = io.connect('http://192.168.2.48:3000');
+        var configuration = {'iceServers':
+            [{'url': 'stun:stun.services.mozilla.com'},
+                {'url': 'stun:stun.l.google.com:19302'}]
+        };
+        var peerConn;
+        var localVideoStream;
+
+        SOCKET_IO.on('signal',function(data){
+
+            var signal = null;
+            if (!peerConn) answerCall();
+            signal = data;
+            if (signal.sdp) {
+                console.log("Received SDP from remote peer.");
+                peerConn.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+            }
+            else if (signal.candidate) {
+                console.log("Received ICECandidate from remote peer.");
+                peerConn.addIceCandidate(new RTCIceCandidate(signal.candidate));
+            } else if ( signal.closeConnection){
+                console.log("Received 'close call' signal from remote peer.");
+                endCall();
+            }
+
+        });
+
+        $("#startCall").on("click",function(){
+            initiateCall();
+        });
+
+        $("#endCall").on("click",function(){
+            endCall();
+            SOCKET_IO.emit("signal",{"closeConnection": true });
+        });
+
+        function prepareCall() {
+            peerConn = new RTCPeerConnection(configuration);
+            // send any ice candidates to the other peer
+            peerConn.onicecandidate = onIceCandidateHandler;
+            // once remote stream arrives, show it in the remote video element
+            peerConn.onaddstream = onAddStreamHandler;
+        }
+
+// run start(true) to initiate a call
+        function initiateCall() {
+            prepareCall();
+            // get the local stream, show it in the local video element and send it
+            /*navigator.getUserMedia = navigator.webkitGetUserMedia || navigator.getUserMedia;*/
+            navigator.mediaDevices.getUserMedia({ audio: true,video : true}, function (stream) {
+                console.log(stream);
+                localVideoStream = stream;
+                smallVideoArea.src = URL.createObjectURL(stream);
+                peerConn.addStream(stream);
+                createAndSendOffer();
+            }, function(error) { console.log(error);});
+        }
+
+        function answerCall() {
+            prepareCall();
+            // get the local stream, show it in the local video element and send it
+            /*navigator.getUserMedia = navigator.webkitGetUserMedia || navigator.getUserMedia;*/
+            navigator.mediaDevices.getUserMedia({ audio: true,video : true}, function (stream) {
+                console.log(stream);
+                localVideoStream = stream;
+                smallVideoArea.src = URL.createObjectURL(stream);
+                peerConn.addStream(stream);
+                createAndSendAnswer();
+            }, function(error) { console.log(error);});
+        }
+
+        function createAndSendOffer() {
+            peerConn.createOffer(
+                function (offer) {
+                    var off = new RTCSessionDescription(offer);
+                    peerConn.setLocalDescription(new RTCSessionDescription(off),
+                        function() {
+                            SOCKET_IO.emit("signal",{"sdp": off });
+                        },
+                        function(error) { console.log(error);}
+                    );
+                },
+                function (error) { console.log(error);}
+            );
+        }
+
+        function createAndSendAnswer() {
+            peerConn.createAnswer(
+                function (answer) {
+                    var ans = new RTCSessionDescription(answer);
+                    peerConn.setLocalDescription(ans, function() {
+                            SOCKET_IO.emit("signal",{"sdp": ans });
+                        },
+                        function (error) { console.log(error);}
+                    );
+                },
+                function (error) {console.log(error);}
+            );
+        }
+
+        function onIceCandidateHandler(evt) {
+            if (!evt || !evt.candidate) return;
+            SOCKET_IO.emit("signal",{"candidate": evt.candidate });
+        }
+
+        function onAddStreamHandler(evt) {
+            // set remote video stream as source for remote video HTML5 element
+            mainVideoArea.src = URL.createObjectURL(evt.stream);
+        }
+
+        function endCall() {
+            peerConn.close();
+            peerConn = null;
+            if (localVideoStream) {
+                localVideoStream.getTracks().forEach(function (track) {
+                    track.stop();
+                });
+                smallVideoArea.src = "";
+            }
+            if (mainVideoArea) mainVideoArea.src = "";
+        }
+    });
+
+</script>
+
+</body>
+</html>

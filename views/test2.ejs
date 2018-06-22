@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en" xmlns="http://www.w3.org/1999/html">
+<head>
+    <link rel="stylesheet" type="text/css" href="styles.css">
+    <script src="/socket.io/socket.io.js"></script>
+    <script
+            src="https://code.jquery.com/jquery-3.3.1.slim.min.js"
+            integrity="sha256-3edrmyuQ0w65f8gfBsqowzjJe2iM6n0nKciPUp8y+7E="
+            crossorigin="anonymous"></script>
+</head>
+<body>
+
+<style>
+
+    .video-wrap{
+        display: block;
+        width: 100%;
+    }
+    .video-wrap .main-video{
+        display: inline-block;
+        float: left;
+        width: 50%;
+    }
+    .video-wrap .small-video{
+        display: inline-block;
+        float: left;
+        width: 50%;
+    }
+    #mainVideoTag{
+        width: 100%;
+        height: 400px;
+    }
+
+    #smallVideoTag{
+        width: 100%;
+        height: 400px;
+    }
+
+</style>
+
+<div class="video-wrap">
+    <div class="main-video">
+        <video id="mainVideoTag" class="" autoplay></video>
+    </div>
+    <div class="small-video">
+        <video id="smallVideoTag" autoplay muted="muted"></video>
+    </div>
+</div>
+
+<div>
+    <input type="button" class="btn btn-primary" value="START CALL" id="start"/>
+</div>
+
+<script>
+
+    var deviceId = "15c19d247c3a765985fe7172108bbd0ea69ffab55326b133db477e61916e4725";
+
+    navigator.mediaDevices.enumerateDevices().then(gotDevices).catch(handleError);
+
+    function handleError(error) {
+        console.log('navigator.getUserMedia error: ', error);
+    }
+
+    function gotDevices(deviceInfos) {
+
+        for (var i = 0; i !== deviceInfos.length; ++i) {
+            var deviceInfo = deviceInfos[i];
+            if (deviceInfo.kind === 'videoinput') {
+                console.log(deviceInfo.label || 'camera ' + (videoSelect.length + 1),deviceInfo);
+            }
+        }
+    }
+
+
+    io = io.connect();
+    var configuration = {
+        'iceServers': [{
+            'url': 'stun:stun.l.google.com:19302'
+        }]
+    };
+    var rtcPeerConn;
+    var mainVideoArea = document.querySelector("#mainVideoTag");
+    var smallVideoArea = document.querySelector("#smallVideoTag");
+
+    io.on('signal', function (data) {
+        if (data.user_type == 'signaling') {
+            if (!rtcPeerConn) startSignaling();
+            var message = JSON.parse(data.user_data);
+            console.log(message);
+            if (message.sdp) {
+                rtcPeerConn.setRemoteDescription(new RTCSessionDescription(message.sdp), function () {
+                    // if we received an offer, we need to answer
+                    if (rtcPeerConn.remoteDescription.type == 'offer') {
+                        rtcPeerConn.createAnswer(sendLocalDesc, logError);
+                    }
+                }, logError);
+            }
+            else {
+                rtcPeerConn.addIceCandidate(new RTCIceCandidate(message.candidate));
+            }
+        }else{
+            if (!rtcPeerConn) startSignaling();
+        }
+    });
+
+    function startSignaling() {
+        console.log("starting signaling...");
+        rtcPeerConn = new webkitRTCPeerConnection(configuration);
+
+        // send any ice candidates to the other peer
+        rtcPeerConn.onicecandidate = function (evt) {
+            if (evt.candidate)
+                io.emit('signal', {
+                    "user_type": "signaling",
+                    "command": "icecandidate",
+                    "user_data": JSON.stringify({'candidate': evt.candidate})
+                });
+            console.log("completed sending an ice candidate...");
+        };
+
+        // let the 'negotiationneeded' event trigger offer generation
+        rtcPeerConn.onnegotiationneeded = function () {
+            console.log("on negotiation called");
+            rtcPeerConn.createOffer(sendLocalDesc, logError);
+        };
+
+        // once remote stream arrives, show it in the main video element
+        rtcPeerConn.onaddstream = function (evt) {
+            console.log("going to add their stream...");
+            mainVideoArea.src = URL.createObjectURL(evt.stream);
+        };
+
+        rtcPeerConn.onopen = function () {
+            console.log("Connected");
+        };
+
+        rtcPeerConn.onerror = function (err) {
+            console.log("Got error", err);
+        };
+
+        if(true){
+            console.log("deviceId",deviceId);
+            // get a local stream, show it in our video tag and add it to be sent
+            navigator.getUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
+            navigator.getUserMedia({
+                'audio': true,
+                'video':{
+                    deviceId : deviceId
+                }
+            }, function (stream) {
+                console.log("going to display my stream...");
+                smallVideoArea.src = URL.createObjectURL(stream);
+                rtcPeerConn.addStream(stream);
+            }, logError);
+        }
+
+    }
+
+    function sendLocalDesc(desc) {
+        rtcPeerConn.setLocalDescription(desc, function () {
+            console.log("sending local description");
+            io.emit('signal', {
+                "user_type": "signaling",
+                "command": "SDP",
+                "user_data": JSON.stringify({'sdp': rtcPeerConn.localDescription})
+            });
+        }, logError);
+    }
+
+    function logError(error) {
+    }
+
+
+    $(document).ready(function(){
+        $("#start").on("click",function(){
+            deviceId = "f2327427f10ec8baeb876d13dbbd44f4880cae004509760f351a57681d207f75";
+            if (!rtcPeerConn) startSignaling();
+        });
+    });
+
+</script>
+
+</body>
+</html>

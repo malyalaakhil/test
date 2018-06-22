@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en" xmlns="http://www.w3.org/1999/html">
+<head>
+    <title>Troop Messenger Video Call</title>
+    <link rel="stylesheet" type="text/css" href="styles.css">
+    <script src="/socket.io/socket.io.js"></script>
+    <script
+            src="https://code.jquery.com/jquery-3.3.1.slim.min.js"
+            integrity="sha256-3edrmyuQ0w65f8gfBsqowzjJe2iM6n0nKciPUp8y+7E="
+            crossorigin="anonymous"></script>
+</head>
+<body>
+<div class="main-video">
+    <video width="100%" height="300" id="mainVideoTag"></video>
+</div>
+<div class="small-video">
+    <video width="50%" height="150" id="smallVideoTag"></video>
+</div>
+
+<input type="button" class="btn btn-default" value="Start Call" id="startCall"/>
+<input type="button" class="btn btn-default" value="End Call" id="endCall"/>
+
+<script>
+    /*var configuration = {'iceServers':
+        [{'url': 'stun:stun.l.google.com:19302'}]
+    };*/
+    var configuration = {'iceServers':
+        [{
+            "url": "turn:34.231.124.197:3478",
+            "username": "akshay",
+            "credential": "123456"
+        }]
+    };
+    var rtcPeerConn;
+    var localVideoStream;
+    var SOCKET_IO = io.connect('http://192.168.43.188:3000');
+
+    $(document).ready(function(){
+
+        $("#startCall").on("click",function(){
+            initWebRtc();
+        });
+
+        $("#endCall").on("click",function(){
+            stopVideoCalling();
+        });
+
+
+
+        SOCKET_IO.on("video_signal",function(data){
+            switch(data.type) {
+                case "offer":
+                    onOffer(data.offer);
+                    break;
+                case "answer":
+                    onAnswer(data.answer);
+                    break;
+                case "candidate":
+                    onCandidate(data.candidate);
+                    break;
+                default:
+                    break;
+            }
+        });
+
+
+    });
+
+    //when another user answers to our offer
+    function onAnswer(answer) {
+        rtcPeerConn.setRemoteDescription(new RTCSessionDescription(answer));
+    }
+
+    //when we got ice candidate from another user
+    function onCandidate(candidate) {
+        if(!rtcPeerConn){
+            initWebRtc();
+        }
+        rtcPeerConn.addIceCandidate(new RTCIceCandidate(candidate),function(){
+            console.log("success");
+        },function(err){
+            console.log("error",err);
+        });
+    }
+
+    function initWebRtc(){
+        rtcPeerConn = new RTCPeerConnection(configuration);
+        rtcPeerConn.onicecandidate = function (evt) {
+            if (evt.candidate){
+                SOCKET_IO.emit('video_signal',{"type":"candidate", "candidate": evt.candidate});
+            }
+        };
+
+        rtcPeerConn.onnegotiationneeded = function () {
+            console.log("on negotiation called");
+            rtcPeerConn.createOffer(sendLocalDesc, logError);
+        };
+
+        rtcPeerConn.onopen = function () {
+            console.log("Connected");
+        };
+
+        rtcPeerConn.onerror = function (err) {
+            console.log("Got error", err);
+        };
+
+        rtcPeerConn.oniceconnectionstatechange = function() {
+            try{
+                if(rtcPeerConn.iceConnectionState == 'disconnected') {
+                    stopVideoCalling();
+                }
+            }catch (e){
+
+            }
+        };
+
+        rtcPeerConn.onaddstream = function (evt) {
+            console.log("going to add their stream...",evt.stream,evt);
+            remoteVideoStream = evt.stream;
+            $("#mainVideoTag").attr("src",URL.createObjectURL(evt.stream));
+        };
+
+        addStream();
+    }
+
+    function addStream(){
+        // get a local stream, show it in our video tag and add it to be sent
+        navigator.getUserMedia({
+                'audio': true,
+                'video':true
+            }, function(stream) {
+                localVideoStream = stream;
+                localVideoStream.stop = function () {
+                    this.getAudioTracks().forEach(function (track) {
+                        track.stop();
+                    });
+                    this.getVideoTracks().forEach(function (track) { //in case... :)
+                        track.stop();
+                    });
+                };
+                $("#smallVideoTag").attr("src",URL.createObjectURL(stream));
+                rtcPeerConn.addStream(stream);
+            }, function(err) {
+                console.log("media err",err);
+                console.info('Error, Video call is not available. Try in latest Chrome with Screen sharing enabled in about:flags.');
+            }
+        );
+    }
+
+    //when somebody wants to call us
+    function onOffer(offer) {
+        if(!rtcPeerConn){
+            initWebRtc();
+        }
+        rtcPeerConn.setRemoteDescription(new RTCSessionDescription(offer),function(){
+            rtcPeerConn.createAnswer(function (answer) {
+                rtcPeerConn.setLocalDescription(answer);
+                SOCKET_IO.emit('video_signal',{"type":"answer", answer: answer});
+            }, function (error) {
+                alert("oops...error");
+            });
+        });
+    }
+
+    function sendLocalDesc(desc) {
+        rtcPeerConn.setLocalDescription(desc, function () {
+            SOCKET_IO.emit('video_signal',{"type":"offer", 'offer': rtcPeerConn.localDescription});
+        }, logError);
+    }
+
+    function stopVideoCalling(){
+        if(rtcPeerConn){
+            try{
+                rtcPeerConn.close();
+                rtcPeerConn.onicecandidate = null;
+                rtcPeerConn.onaddstream = null;
+            }catch (e){
+                console.log("close connection",e);
+            }
+        }
+        rtcPeerConn = null;
+        if(localVideoStream != null){
+            try{
+                localVideoStream.stop();
+            }catch (e){
+                console.log("stream Err",e);
+            }
+            localVideoStream = null;
+        }
+        $("#smallVideoTag").attr("src","");
+        $("#mainVideoTag").attr("src","");
+    }
+
+    function logError(error) {
+        console.error(error.name + ': ' + error.message);
+    }
+
+</script>
+
+</body>
+</html>

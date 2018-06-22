@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="en" xmlns="http://www.w3.org/1999/html">
+<head>
+    <title>Troop Messenger Video Call</title>
+    <link rel="stylesheet" type="text/css" href="styles.css">
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="jquery.min.js"></script>
+    <style>
+        .my-video-wrapper{
+            display: inline-block;
+            float: left;
+            position: relative;
+            width: 300px;
+            margin: 30px;
+        }
+        #myVideo{
+            object-fit: fill;
+            height: 230px;
+            width: 300px;
+            border-radius: 10px;
+            box-shadow: 0 0 10px 1px rgba(0,0,0,0.5);
+        }
+        .my-video-wrapper span.name{
+            display: inline-block;
+            width: 100%;
+            position: absolute;
+            bottom: 4px;
+            height: 40px;
+            line-height: 40px;
+            background-color: rgba(0,0,0,0.7);
+            color: #fff;
+            text-align: center;
+            border-bottom-left-radius: 10px;
+            border-bottom-right-radius: 10px;
+        }
+        .video-wrapper{
+            min-height: 320px;
+        }
+        .their-video-wrapper{
+            display: inline-block;
+            float: left;
+            position: relative;
+            width: 300px;
+            margin: 30px;
+        }
+        .their-video-wrapper span.name{
+            display: inline-block;
+            width: 100%;
+            position: absolute;
+            left: 0;
+            bottom: 4px;
+            height: 40px;
+            line-height: 40px;
+            background-color: rgba(0,0,0,0.7);
+            color: #fff;
+            text-align: center;
+            border-bottom-left-radius: 10px;
+            border-bottom-right-radius: 10px;
+        }
+        .their-video-wrapper video{
+            object-fit: fill;
+            height: 230px;
+            width: 300px;
+            border-radius: 10px;
+            box-shadow: 0 0 10px 1px rgba(0,0,0,0.5);
+        }
+        .their-video-wrapper .their-audio{
+            display: inline-block;
+            background-image: url("../img/mute-audio.svg");
+            background-size: 60%;
+            right: 0px;
+            bottom: 4px;
+            position: absolute;
+            float: right;
+            background-color: #8BC34A;
+            height: 40px;
+            width: 40px;
+            border-bottom-right-radius: 7px;
+            background-position: center;
+            background-repeat: no-repeat;
+            cursor: pointer;
+        }
+        .their-video-wrapper .their-audio.active{
+            background-image: url("../img/speaker.svg");
+        }
+        #leaveCall{
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+<div class="buttons-wrapper">
+    <input type="button" class="btn btn-default" value="Start Call" id="startCall"/>
+    <input type="button" class="btn btn-default" value="Join Call" id="joinCall"/>
+    <input type="button" class="btn btn-default" value="End Call" id="endCall"/>
+    <input type="button" class="btn btn-default" value="Leave Call" id="leaveCall"/>
+    <input type="button" class="btn btn-default" value="Mute My Audio" id="muteMyAudio"/>
+    <input type="button" class="btn btn-default" value="Mute My Video" id="muteMyVideo"/>
+</div>
+
+<div class="video-wrapper">
+    <div class="my-video-wrapper">
+        <video id="myVideo" height="300" width="300" autoplay></video>
+        <span class="name">My Video</span>
+    </div>
+</div>
+
+<script>
+
+    /*var configuration = {'iceServers':
+        [{'url': 'stun:stun.l.google.com:19302'}]
+    };*/
+    var configuration = {'iceServers':
+        [{
+            url: "turn:34.231.124.197:3478",
+            username : "akshay",
+            credential: "123456"
+        }]
+    };
+    var rtcPeerConn = {};
+    var localVideoStream = {};
+    var SOCKET_IO = io.connect('https://192.168.2.48:3001');
+    var webrtcSignalId = "";
+    var initiator = false;
+
+    $(document).ready(function(){
+
+        $("body").on("click",".their-video-wrapper .their-audio",function(){
+            var videoTag = $(this).parent().find(".their-video-wrapper");
+            if($(this).hasClass("active")){
+                $(this).removeClass("active");
+                videoTag.prop('muted', true);
+            }else{
+                $(this).addClass("active");
+                videoTag.prop('muted', false);
+            }
+        });
+
+        $("#startCall").on("click",function(){
+            SOCKET_IO.emit("start_video_call",{id : SOCKET_IO.id});
+            initiator = true;
+            setIntiatorValues(true);
+        });
+
+        $("#joinCall").on("click",function(){
+            SOCKET_IO.emit("join_video_call",{id : SOCKET_IO.id});
+            initiator = true;
+            setIntiatorValues(false);
+        });
+
+        $("#endCall").on("click",function(){
+            SOCKET_IO.emit("stop_video_call",{});
+            stopVideoCalling();
+        });
+
+        $("#leaveCall").on("click",function(){
+            SOCKET_IO.emit("leave_video_call",{socket_id : SOCKET_IO.id});
+            stopVideoCalling();
+        });
+
+        $("#muteMyAudio").on("click",function(){
+            if($(this).val() == "Mute My Audio"){
+                $(this).val("Unmute My Audio");
+                audioMute(true);
+            }else{
+                $(this).val("Mute My Audio");
+                audioMute(false);
+            }
+        });
+
+        $("#muteMyVideo").on("click",function(){
+            if($(this).val() == "Mute My Video"){
+                $(this).val("Unmute My Video");
+                videoMute(true);
+            }else{
+                $(this).val("Mute My Video");
+                videoMute(false);
+            }
+        });
+
+        SOCKET_IO.on("video_signal_conference",function(data){
+            switch(data.type) {
+                case "offer":
+                    onOffer(data.offer,getSocketId(data.from_id,data.to_id),data.from_id);
+                    break;
+                case "answer":
+                    onAnswer(data.answer,getSocketId(data.from_id,data.to_id),data.from_id);
+                    break;
+                case "candidate":
+                    onCandidate(data.candidate,getSocketId(data.from_id,data.to_id),data.from_id);
+                    break;
+                default:
+                    break;
+            }
+        }).on("start_video_call",function(data){
+            initiator = false;
+            setIntiatorValues(false);
+            data.sockets.forEach(function(socketId){
+                if(socketId != SOCKET_IO.id){
+                    webrtcSignalId = getSocketId(socketId,SOCKET_IO.id);
+                    initWebRtc(webrtcSignalId,socketId);
+                }
+            });
+        }).on("join_video_call",function(data){
+            data.sockets.forEach(function(socketId){
+                if(socketId != SOCKET_IO.id){
+                    webrtcSignalId = getSocketId(socketId,SOCKET_IO.id);
+                    initWebRtc(webrtcSignalId,socketId);
+                }
+            });
+        }).on("leave_video_call",function(data){
+            webrtcSignalId = getSocketId(data.socket_id,SOCKET_IO.id);
+            stopVideoCalling(webrtcSignalId);
+        }).on("stop_video_call",function(data){
+            stopVideoCalling();
+        });
+
+
+    });
+
+    //when another user answers to our offer
+    function onAnswer(answer,id,toId) {
+        if(!rtcPeerConn[id]){
+            initWebRtc(id,toId);
+        }
+        rtcPeerConn[id].setRemoteDescription(new RTCSessionDescription(answer));
+    }
+
+    //when we got ice candidate from another user
+    function onCandidate(candidate,id,toId) {
+        if(!rtcPeerConn[id]){
+            initWebRtc(id,toId);
+        }
+        rtcPeerConn[id].addIceCandidate(new RTCIceCandidate(candidate),function(){
+            console.log("success");
+        },function(err){
+            console.log("error",err);
+        });
+    }
+
+    function initWebRtc(id,toId){
+        rtcPeerConn[id] = new RTCPeerConnection(configuration);
+        rtcPeerConn[id].onicecandidate = function (evt) {
+            if (evt.candidate){
+                if(evt.candidate.candidate.indexOf('typ relay') >= 0){
+                    console.log("candidates",evt.candidate,evt.candidate.candidate.indexOf('typ relay'));
+                }
+                console.log("tes",evt.candidate.candidate.split(" ")[7]);
+                SOCKET_IO.emit('video_signal_conference',{"type":"candidate", "candidate": evt.candidate,"from_id" : SOCKET_IO.id,"to_id" : toId});
+            }
+        };
+
+        rtcPeerConn[id].onnegotiationneeded = function () {
+            rtcPeerConn[id].createOffer(function(desc){
+                rtcPeerConn[id].setLocalDescription(desc, function () {
+                    SOCKET_IO.emit('video_signal_conference',{"type":"offer", 'offer': rtcPeerConn[id].localDescription,"from_id" : SOCKET_IO.id,"to_id" : toId});
+                }, logError);
+            }, logError);
+        };
+
+        rtcPeerConn[id].onopen = function () {
+            console.log("Connected");
+        };
+
+        rtcPeerConn[id].onerror = function (err) {
+            console.log("Got error", err);
+        };
+
+        rtcPeerConn[id].oniceconnectionstatechange = function() {
+            try{
+                console.log("iceConnectionState",rtcPeerConn[id].iceConnectionState);
+                if(rtcPeerConn[id].iceConnectionState == 'disconnected') {
+                    stopVideoCalling(id);
+                }
+            }catch (e){
+
+            }
+        };
+
+        rtcPeerConn[id].onaddstream = function (evt) {
+            setTheirVideo(URL.createObjectURL(evt.stream),id);
+        };
+
+        addStream(id);
+    }
+
+    function addStream(id){
+        // get a local stream, show it in our video tag and add it to be sent
+        navigator.getUserMedia({
+                'audio': true,
+                'video':true,
+                'mandatory' : {
+                    'iceTransports' : 'none'
+                }
+            }, function(stream) {
+                localVideoStream[id] = stream;
+                localVideoStream[id].stop = function () {
+                    this.getAudioTracks().forEach(function (track) {
+                        track.stop();
+                    });
+                    this.getVideoTracks().forEach(function (track) { //in case... :)
+                        track.stop();
+                    });
+                };
+                $("#myVideo").attr("src",URL.createObjectURL(stream));
+                rtcPeerConn[id].addStream(stream);
+            }, function(err) {
+                console.log("media err",err);
+                console.info('Error, Video call is not available. Try in latest Chrome with Screen sharing enabled in about:flags.');
+            }
+        );
+    }
+
+    //when somebody wants to call us
+    function onOffer(offer,id,toId) {
+        if(!rtcPeerConn[id]){
+            initWebRtc(id,toId);
+        }
+        rtcPeerConn[id].setRemoteDescription(new RTCSessionDescription(offer),function(){
+            rtcPeerConn[id].createAnswer(function (answer) {
+                rtcPeerConn[id].setLocalDescription(answer);
+                SOCKET_IO.emit('video_signal_conference',{"type":"answer", answer: answer,"from_id" : SOCKET_IO.id,"to_id" : toId});
+            }, function (error) {
+                alert("oops...error");
+            });
+        });
+    }
+
+    function stopVideoCalling(id){
+        console.log("stop video call id",id);
+        if(id != undefined){
+            if(rtcPeerConn[id]){
+                try{
+                    rtcPeerConn[id].close();
+                    rtcPeerConn[id].onicecandidate = null;
+                    rtcPeerConn[id].onaddstream = null;
+                }catch (e){
+                    console.log("close connection",e);
+                }
+                $("#their-video-"+id).remove();
+            }
+            delete rtcPeerConn[id];
+            initiator = false;
+            setIntiatorValues(true);
+        }else{
+            console.log("stop video call");
+            Object.keys(rtcPeerConn).forEach(function(key){
+                if(rtcPeerConn[key]){
+                    try{
+                        rtcPeerConn[key].close();
+                        rtcPeerConn[key].onicecandidate = null;
+                        rtcPeerConn[key].onaddstream = null;
+                    }catch (e){
+                        console.log("close connection",e);
+                    }
+                }
+            });
+            rtcPeerConn = {};
+            $(".video-wrapper .their-video-wrapper").remove();
+            $("#myVideo").attr("src","");
+            initiator = false;
+            setIntiatorValues(true);
+        }
+    }
+
+    function logError(error) {
+        console.error(error.name + ': ' + error.message);
+    }
+
+    function getSocketId(id1,id2){
+        if(id1 < id2){
+            return id1+"_"+id2;
+        }else{
+            return id2+"_"+id1;
+        }
+    }
+
+    function setTheirVideo(stream,id){
+        var name = $(".their-video-wrapper").length + 1;
+        var html = ' <div class="their-video-wrapper" id="their-video-'+id+'"><video height="300" width="300" autoplay src="'+stream+'"></video><span class="name">Video '+name+'</span><span class="their-audio active"></span></div>';
+        $(".video-wrapper").append(html);
+    }
+
+    function videoMute(isMute){
+        Object.keys(localVideoStream).forEach(function(key){
+            localVideoStream[key].getVideoTracks().forEach(function (track) {
+                track.enabled = !(isMute);
+            });
+        });
+    }
+
+    function audioMute(isMute){
+        Object.keys(localVideoStream).forEach(function(key){
+            localVideoStream[key].getAudioTracks().forEach(function (track) {
+                track.enabled = !(isMute);
+            });
+        });
+    }
+
+    function setIntiatorValues(set){
+        if(set){
+            $("#endCall").show();
+            $("#leaveCall").hide();
+        }else{
+            $("#endCall").hide();
+            $("#leaveCall").show();
+        }
+    }
+
+</script>
+
+</body>
+</html>
